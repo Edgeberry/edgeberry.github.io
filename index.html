@@ -999,7 +999,7 @@ function syncFleetCarts(){
   }
 }
 
-let artwork=null, artFullBleed=true;
+let artwork=null, artFullBleed=true, artAspect=0;
 const state={shell:'#0007FF',plates:'#0007FF',plate:'#1E1E1E'};
 function roundRect(c,x,y,w,h,r){
   c.beginPath();c.moveTo(x+r,y);
@@ -1013,20 +1013,31 @@ function drawSticker(){
   sctx.save();sctx.clip();
   sctx.fillStyle=state.plate;sctx.fillRect(0,0,W,H);
   if(artwork){
-    if(artFullBleed) sctx.drawImage(artwork,0,0,W,H);
-    else{
-      const m=2.5*PPMM;
-      const s=Math.min((W-2*m)/artwork.width,(H-2*m)/artwork.height);
-      const w=artwork.width*s,h=artwork.height*s;
+    /* Artwork drawn to the label's own proportions fills it edge to edge, the
+       same way the default does. Anything else — a square logo, a wordmark —
+       is fitted inside a 2.5 mm margin instead of being stretched.
+       The aspect is taken from the file itself where it can be: an SVG with a
+       viewBox but no width and height reports a meaningless intrinsic size
+       (300 x 150 in Chromium, 0 x 0 elsewhere), which is what made uploaded
+       label art come out at the wrong scale. */
+    const aw=artwork.naturalWidth||artwork.width, ah=artwork.naturalHeight||artwork.height;
+    const aspect=artAspect || (aw&&ah ? aw/ah : W/H);
+    const labelAspect=W/H;
+    if(artFullBleed || Math.abs(aspect-labelAspect)/labelAspect < 0.12){
+      sctx.drawImage(artwork,0,0,W,H);
+    } else {
+      const m=2.5*PPMM, bw=W-2*m, bh=H-2*m;
+      let w=bw, h=bw/aspect;
+      if(h>bh){ h=bh; w=bh*aspect; }
       sctx.drawImage(artwork,(W-w)/2,(H-h)/2,w,h);
     }
   }
   sctx.restore();
   stickerTex.needsUpdate=true;
 }
-function loadArtwork(src,full){
+function loadArtwork(src,full,aspect){
   const img=new Image();
-  img.onload=()=>{artwork=img;artFullBleed=full;drawSticker();};
+  img.onload=()=>{artwork=img;artFullBleed=full;artAspect=aspect||0;drawSticker();};
   img.onerror=()=>{artwork=null;drawSticker();};
   img.src=src;
 }
@@ -1170,9 +1181,29 @@ const mountBox=document.getElementById('mountpick');
   mountBox.appendChild(b);
 });
 moreButton(mountBox, LINKS.mounts);
+/* For an SVG the proportions are read from the markup — viewBox first, then
+   width and height — because the browser's own idea of its size is unreliable.
+   Raster files report their real pixel size, so they need nothing extra. */
+function svgAspect(text){
+  const vb=/viewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(text);
+  if(vb && +vb[1]>0 && +vb[2]>0) return +vb[1]/+vb[2];
+  const w=/<svg[^>]*\swidth\s*=\s*["']([\d.]+)/i.exec(text),
+        h=/<svg[^>]*\sheight\s*=\s*["']([\d.]+)/i.exec(text);
+  return (w&&h&&+h[1]>0) ? +w[1]/+h[1] : 0;
+}
 document.getElementById('logo').addEventListener('change',e=>{
   const f=e.target.files&&e.target.files[0]; if(!f) return;
-  const r=new FileReader(); r.onload=()=>loadArtwork(r.result,false); r.readAsDataURL(f);
+  const isSvg=/svg/i.test(f.type)||/\.svg$/i.test(f.name);
+  if(isSvg){
+    const t=new FileReader();
+    t.onload=()=>{
+      const aspect=svgAspect(t.result);
+      loadArtwork('data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(t.result))),false,aspect);
+    };
+    t.readAsText(f);
+  } else {
+    const r=new FileReader(); r.onload=()=>loadArtwork(r.result,false); r.readAsDataURL(f);
+  }
 });
 const plateInput=document.getElementById('platecolour');
 plateInput.addEventListener('input',()=>{
